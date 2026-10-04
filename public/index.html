@@ -42,7 +42,13 @@
           <select id="employeeFilter">
             <option value="">ყველა თანამშრომელი</option>
           </select>
-          <button id="exportCsvBtn" title="ჩამოტვირთეთ ეს ხედი Excel ანგარიშად">ანგარიშის ჩამოტვირთვა</button>
+          <button id="exportCsvBtn" title="ჩამოტვირთეთ ეს ხედი Excel ანგარიშად">რეპორტის ამოღება</button>
+          <button id="exportLast30Btn" title="ჩამოტვირთეთ ბოლო 30 დღის ჩანაწერები Excel ანგარიშად">ბოლო 30 დღე</button>
+          <label for="exportRangeStart">დან</label>
+          <input type="date" id="exportRangeStart" />
+          <label for="exportRangeEnd">მდე</label>
+          <input type="date" id="exportRangeEnd" />
+          <button id="exportRangeBtn" title="ჩამოტვირთეთ მითითებული პერიოდი Excel ანგარიშად">პერიოდის ამოღება</button>
           <span id="status"></span>
         </div>
 
@@ -70,7 +76,9 @@
         <div class="subsection">
           <h2>რეგისტრირებული თანამშრომლები</h2>
           <p class="panel-hint">შეცვალეთ სახელი ან დღიური ანაზღაურება, ან წაშალეთ ვინმე — წაშლისას იშლება მისი სახეც და წვდომაც თავად ტერმინალიდან, არა მხოლოდ ამ დაფიდან.</p>
+          <input type="text" id="workerSearchInput" class="worker-search" placeholder="ძებნა სახელით ან ნომრით…" />
           <div class="worker-grid" id="workerGrid"></div>
+          <div class="empty" id="workerSearchEmpty" hidden>ვერაფერი მოიძებნა.</div>
         </div>
       </section>
 
@@ -202,6 +210,10 @@
         <div class="field-row">
           <button id="backupNowBtn">სარეზერვო ასლის შექმნა ახლავე</button>
         </div>
+        <div class="field-row">
+          <button id="backfillPhotosBtn">თანამშრომლების ფოტოების აღდგენა მოწყობილობიდან</button>
+        </div>
+        <p class="hint-text">იმ თანამშრომლებისთვის, ვისაც საკუთარი პროფილის ფოტო ჯერ არ აქვს (დამატებული ამ ფუნქციის დამატებამდე) — წამოიღებს მათ უკვე შენახულ სახის ფოტოს პირდაპირ ტერმინალიდან.</p>
         <div class="enroll-msg" id="settingsMsg"></div>
         <pre id="logView" hidden></pre>
         <div id="backupList" class="hint-text"></div>

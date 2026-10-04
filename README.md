@@ -1,10 +1,19 @@
-# face-terminal
+# face-terminal-solo
 
 Attendance and payroll dashboard for a Hikvision DS-K1T343EWX face/card
 access terminal — who came in and when, check-in/check-out, live updates,
 photo capture, worker enrollment/management, and daily-wage payroll. UI is
 in Georgian; almost everything (site name, currency, poll timing, terminal
 IP) is customizable from the dashboard itself, no config file editing.
+
+**This is the standalone build** — no login/accounts system, open to anyone
+on the dashboard directly (matches a site that just wants the attendance
+tracker with nobody needing a password). It's a separate codebase from
+[face-terminal-app](https://github.com/Synx33/face-terminal-app) (which has
+accounts/permissions and the DS-K2802 card-reader controller integration),
+forked before that work started and kept updated with only the fixes that
+make sense here. Run `windows\update.ps1` to pull the latest version of
+this build specifically — it will never bring in a login requirement.
 
 The terminal moves between networks (the office LAN during development, an
 install site afterward), so it doesn't need a hardcoded IP: leave `DEVICE_IP`

@@ -16,6 +16,23 @@ const logger = require('./logger');
 
 const BACKOFF_MS = 10 * 60_000; // 10 min between automatic retries once auth is known to be failing
 
+// A single 401 isn't reliable proof the password is actually wrong -- digest
+// auth is a two-round-trip handshake (an unauthenticated probe, then a
+// retry with the computed Authorization header), and a network blip during
+// that second round trip can come back 401 for timing/nonce reasons that
+// have nothing to do with the credentials being correct. Confirmed live
+// (twice) with the exact same, unchanged, correct password: a real-world
+// bad patch on one site's link to its terminal wasn't a single momentary
+// glitch either -- the captured log showed THREE separate 10s connection
+// timeouts (hard failures below the HTTP layer entirely, not 401s) spread
+// across roughly 30+ seconds, with a second genuine 401 landing somewhere
+// in that same rough patch. A 2-in-a-row threshold isn't enough margin to
+// ride out an episode that long. 3 still catches an actually-wrong password
+// almost immediately (the next poll is ~1.5s later each time -- a handful
+// of seconds total, nothing a human would notice), while giving a flaky
+// link's bad patches real room before concluding the credentials are wrong.
+const FAILURES_BEFORE_BACKOFF = 3;
+
 // Factory instead of bare module state so a second physical device (the
 // DS-K2802 card-reader controller) can track its own lockout/backoff
 // independently of the face terminal's — a wrong password on one device
@@ -31,13 +48,17 @@ function createAuthState(label = 'device') {
   }
 
   function recordAuthFailure() {
-    const enteringBackoff = !isBackedOff();
     consecutiveFailures += 1;
+    if (consecutiveFailures < FAILURES_BEFORE_BACKOFF) {
+      logger.error(`[auth:${label}] device rejected credentials (401) — treating as a possible one-off network blip (failure ${consecutiveFailures}/${FAILURES_BEFORE_BACKOFF}), retrying normally rather than backing off yet.`);
+      return;
+    }
+    const enteringBackoff = !isBackedOff();
     backoffUntil = Date.now() + BACKOFF_MS;
     // Log once on the transition into backoff, not on every skipped tick
     // afterward — that would just be a different flavor of the same spam.
     if (enteringBackoff) {
-      logger.error(`[auth:${label}] device rejected credentials (401) — pausing automatic requests for ${BACKOFF_MS / 60_000} min to avoid hammering a possible lockout. Fix credentials in Settings to retry immediately.`);
+      logger.error(`[auth:${label}] device rejected credentials (401) ${consecutiveFailures} times in a row — pausing automatic requests for ${BACKOFF_MS / 60_000} min to avoid hammering a possible lockout. Fix credentials in Settings to retry immediately.`);
     }
   }
 

@@ -400,6 +400,23 @@ button:disabled { opacity: 0.5; cursor: default; transform: none; }
   flex-direction: column;
   gap: 0.5rem;
 }
+/* .pending-card sets display:flex via a class selector -- equal specificity
+   to the browser's default [hidden] { display: none }, and author CSS wins
+   ties regardless of source order. Without this, the worker search filter's
+   card.hidden = true would leave every "hidden" card still visibly laid out. */
+.pending-card[hidden] { display: none; }
+
+.worker-search {
+  width: 100%;
+  max-width: 320px;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  margin-bottom: 0.9rem;
+}
 
 .pending-card .thumb {
   width: 100%;

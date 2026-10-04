@@ -139,6 +139,23 @@ if (!existingEmployeeCols.includes('card_no')) {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_card_no ON employees(card_no) WHERE card_no IS NOT NULL');
 }
 
+// The employee's own stable profile photo -- the one deliberately captured
+// and reviewed at enrollment time. Exists because listEmployees() used to
+// show a worker's MOST RECENT CHECK-IN photo instead of a dedicated one, and
+// that check-in photo is a best-effort LIVE snapshot grabbed asynchronously
+// after the event fires (see server.js's capturePhoto()) -- fine most of
+// the time, but confirmed live: enrolling someone often triggers a real
+// check-in event moments later as the device recognizes the face it was
+// just given, and by the time that async snapshot actually executes the
+// person has often already stepped back from the terminal, silently
+// replacing the clean enrollment photo the operator just took and reviewed
+// with an empty-frame shot. NULL for employees enrolled before this existed
+// (listEmployees() falls back to their latest check-in photo for those,
+// same as before) and for card-only employees (no face capture at all).
+if (!existingEmployeeCols.includes('picture_path')) {
+  db.exec('ALTER TABLE employees ADD COLUMN picture_path TEXT');
+}
+
 const upsertEmployeeStmt = db.prepare(`
   INSERT INTO employees (employee_no, name, daily_wage, updated_at) VALUES (?, ?, ?, ?)
   ON CONFLICT(employee_no) DO UPDATE SET
@@ -161,14 +178,41 @@ function employeeName(employeeNo) {
   return row ? row.name : null;
 }
 
+// The employee's own picture_path (set once at enrollment, see
+// setEmployeePicture below) always wins when present -- a deliberate,
+// reviewed photo should never get silently swapped out by a later, best-
+// effort live check-in snapshot. Falls back to the latest check-in photo
+// only for the employees enrolled before this column existed, who have
+// nothing else to show.
 function listEmployees() {
   return db.prepare(`
     SELECT e.employee_no, e.name, e.daily_wage, e.updated_at, e.card_no,
-      (SELECT c.picture_path FROM checkins c
-       WHERE c.employee_no = e.employee_no AND c.picture_path IS NOT NULL
-       ORDER BY c.event_time DESC LIMIT 1) AS picture_path
+      COALESCE(
+        e.picture_path,
+        (SELECT c.picture_path FROM checkins c
+         WHERE c.employee_no = e.employee_no AND c.picture_path IS NOT NULL
+         ORDER BY c.event_time DESC LIMIT 1)
+      ) AS picture_path
     FROM employees e
     ORDER BY e.name COLLATE NOCASE ASC
+  `).all();
+}
+
+function setEmployeePicture(employeeNo, picturePath) {
+  db.prepare('UPDATE employees SET picture_path = ? WHERE employee_no = ?').run(picturePath, String(employeeNo));
+}
+
+// The employees table's OWN picture_path column, unlike listEmployees()'
+// COALESCE'd version above -- used to find who genuinely has no profile
+// photo of their own yet (enrolled before this column existed), as opposed
+// to who merely has no check-in photo. Excludes card-only employees (the
+// 'C' prefix, same check as isCardOnlyEmployeeNo/nextLocalEmployeeNo below
+// -- they were never enrolled on the face terminal, so there's no device-
+// side face record to ever backfill for them.
+function listEmployeesMissingPicture() {
+  return db.prepare(`
+    SELECT employee_no, name FROM employees
+    WHERE picture_path IS NULL AND employee_no NOT LIKE 'C%'
   `).all();
 }
 
@@ -332,7 +376,13 @@ function isSameSession(employeeNo, eventTime, excludeId) {
   return periodOf(eventTime, boundary) === periodOf(prior.event_time, boundary);
 }
 
-function listCheckins({ date, employeeNo, limit = 200 } = {}) {
+// date is an exact single day; start/end is an inclusive range (both
+// "YYYY-MM-DD") -- used by the export's "last 30 days" and custom-range
+// options, since a real attendance report needs more than just one day at
+// a time. date and start/end are mutually exclusive in practice (the
+// caller picks one), but nothing stops both from being passed -- they'd
+// just narrow together.
+function listCheckins({ date, start, end, employeeNo, limit = 200 } = {}) {
   let sql = `
     WITH scoped AS (
       SELECT id, device_id, serial_no, event_time, received_at, employee_no, name, verify_mode, door_no, source, picture_path
@@ -342,6 +392,14 @@ function listCheckins({ date, employeeNo, limit = 200 } = {}) {
   if (date) {
     sql += ' AND substr(event_time, 1, 10) = ?';
     params.push(date);
+  }
+  if (start) {
+    sql += ' AND substr(event_time, 1, 10) >= ?';
+    params.push(start);
+  }
+  if (end) {
+    sql += ' AND substr(event_time, 1, 10) <= ?';
+    params.push(end);
   }
   if (employeeNo) {
     sql += ' AND employee_no = ?';
@@ -491,7 +549,7 @@ module.exports = {
   db, upsertEmployee, employeeName, insertCheckin, listCheckins, stats, clearCheckins, DB_PATH,
   setCheckinPicture, getCheckinById, isSameSession, periodOf, getCheckoutAfter, getPollIntervalMs,
   insertPendingWorker, listPendingWorkers, getPendingWorker, deletePendingWorker,
-  listEmployees, setEmployeeWage, deleteEmployeeLocal, getSetting, setSetting, payroll,
+  listEmployees, setEmployeeWage, setEmployeePicture, listEmployeesMissingPicture, deleteEmployeeLocal, getSetting, setSetting, payroll,
   setEmployeeCard, employeeByCard, isCardOnlyEmployeeNo, nextLocalEmployeeNo,
   insertPendingCard, listPendingCards, getPendingCard, setPendingCardNo, findArmedPendingCard, deletePendingCard,
 };

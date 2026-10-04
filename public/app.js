@@ -510,6 +510,50 @@ document.getElementById('exportCsvBtn').addEventListener('click', () => {
   window.location.href = `/api/checkins/export?${params}`;
 });
 
+// -29 days (not -30) so "today" is included and the window is a full 30
+// calendar days end to end, same off-by-one reasoning as todayLocal() using
+// Georgia-local date parts rather than raw UTC.
+function last30DaysRange() {
+  const end = todayLocal();
+  const startParts = georgiaParts(new Date(Date.now() - 29 * 24 * 3600_000));
+  const start = `${startParts.year}-${startParts.month}-${startParts.day}`;
+  return { start, end };
+}
+
+document.getElementById('exportLast30Btn').addEventListener('click', () => {
+  const { start, end } = last30DaysRange();
+  const params = new URLSearchParams({ start, end });
+  if (employeeFilter.value) params.set('employeeNo', employeeFilter.value);
+  window.location.href = `/api/checkins/export?${params}`;
+});
+
+// Free-form alternative to the "last 30 days" shortcut above -- any period,
+// not just a fixed trailing window. Pre-filled with the same last-30-days
+// range so it's a sensible starting point, not empty date pickers.
+const exportRangeStart = document.getElementById('exportRangeStart');
+const exportRangeEnd = document.getElementById('exportRangeEnd');
+{
+  const { start, end } = last30DaysRange();
+  exportRangeStart.value = start;
+  exportRangeEnd.value = end;
+}
+
+document.getElementById('exportRangeBtn').addEventListener('click', () => {
+  const start = exportRangeStart.value;
+  const end = exportRangeEnd.value;
+  if (!start || !end) {
+    statusEl.textContent = 'მიუთითეთ დაწყებისა და დასრულების თარიღები';
+    return;
+  }
+  if (start > end) {
+    statusEl.textContent = 'დაწყების თარიღი უნდა იყოს დასრულების თარიღზე ადრე';
+    return;
+  }
+  const params = new URLSearchParams({ start, end });
+  if (employeeFilter.value) params.set('employeeNo', employeeFilter.value);
+  window.location.href = `/api/checkins/export?${params}`;
+});
+
 // --- worker management (list / rename / wage / remove) ------------------------
 
 const workerGrid = document.getElementById('workerGrid');
@@ -646,7 +690,24 @@ async function loadWorkers() {
   const workers = await res.json();
   workerGrid.innerHTML = '';
   for (const w of workers) workerGrid.appendChild(renderWorkerCard(w));
+  filterWorkerGrid();
 }
+
+const workerSearchInput = document.getElementById('workerSearchInput');
+const workerSearchEmpty = document.getElementById('workerSearchEmpty');
+function filterWorkerGrid() {
+  const query = workerSearchInput.value.trim().toLowerCase();
+  let anyVisible = false;
+  for (const card of workerGrid.children) {
+    const name = (card.querySelector('.name-input')?.value || '').toLowerCase();
+    const employeeNo = (card.dataset.employeeNo || '').toLowerCase();
+    const match = !query || name.includes(query) || employeeNo.includes(query);
+    card.hidden = !match;
+    if (match) anyVisible = true;
+  }
+  workerSearchEmpty.hidden = anyVisible || workerGrid.children.length === 0;
+}
+workerSearchInput.addEventListener('input', filterWorkerGrid);
 
 // --- payroll -------------------------------------------------------------------
 
@@ -883,6 +944,31 @@ document.getElementById('backupNowBtn').addEventListener('click', async () => {
     await fetch('/api/backups', { method: 'POST' });
     settingsMsg.textContent = 'სარეზერვო ასლი შექმნილია.';
     loadBackups();
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('backfillPhotosBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('backfillPhotosBtn');
+  btn.disabled = true;
+  settingsMsg.className = 'enroll-msg ok';
+  settingsMsg.textContent = 'ფოტოები მოწყობილობიდან იტვირთება… ამას შეიძლება ცოტა ხანი დასჭირდეს.';
+  try {
+    const res = await fetch('/api/employees/backfill-photos', { method: 'POST' });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'ვერ შესრულდა');
+    if (result.updated.length === 0 && result.failed.length === 0) {
+      settingsMsg.textContent = 'ყველა თანამშრომელს უკვე აქვს საკუთარი პროფილის ფოტო — არაფერი გასაკეთებელი.';
+    } else {
+      settingsMsg.className = result.failed.length > 0 ? 'enroll-msg err' : 'enroll-msg ok';
+      settingsMsg.textContent = `წარმატებული: ${result.updated.length}, ვერ მოხერხდა: ${result.failed.length}` +
+        (result.failed.length > 0 ? ` (იხილეთ ლოგი დეტალებისთვის)` : '');
+    }
+    loadWorkers();
+  } catch (err) {
+    settingsMsg.className = 'enroll-msg err';
+    settingsMsg.textContent = err.message;
   } finally {
     btn.disabled = false;
   }

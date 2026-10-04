@@ -353,11 +353,19 @@ app.post('/api/employees', async (req, res) => {
   }
   if (rejectIfAuthBackedOff(res)) return;
   try {
+    const jpegBuffer = photoBase64 ? Buffer.from(photoBase64, 'base64') : null;
     const result = await enrollEmployee({
       name: name.trim(),
-      jpegBuffer: photoBase64 ? Buffer.from(photoBase64, 'base64') : null,
+      jpegBuffer,
       dailyWage: dailyWage === undefined || dailyWage === null ? null : Number(dailyWage),
     });
+    // Same permanent-profile-photo treatment as the pending-capture claim
+    // flow below -- a photo supplied directly here is just as deliberate as
+    // one captured through the UI, and should stick the same way.
+    if (jpegBuffer) {
+      const picturePath = saveSnapshot(jpegBuffer, { employeeNo: result.employeeNo, serialNo: 'enroll' });
+      db.setEmployeePicture(result.employeeNo, picturePath);
+    }
     logger.log(`[enroll] added #${result.employeeNo} ${result.name}${result.photoWarning ? ` (photo rejected: ${result.photoWarning})` : ''}`);
     res.json(result);
   } catch (err) {
@@ -405,7 +413,12 @@ app.post('/api/pending-workers/:id/claim', async (req, res) => {
       dailyWage: dailyWage === undefined || dailyWage === null ? null : Number(dailyWage),
     });
     db.deletePendingWorker(id);
-    deleteSnapshot(pending.picture_path);
+    // The pending capture becomes this employee's permanent profile photo
+    // (see db.js's picture_path migration comment) -- deliberately NOT
+    // deleted here anymore. It still lives under snapshots/pending/, which
+    // is fine; that's just where the file happens to sit, not a claim about
+    // its lifecycle.
+    db.setEmployeePicture(result.employeeNo, pending.picture_path);
     logger.log(`[enroll] claimed pending #${id} as #${result.employeeNo} ${result.name}${result.photoWarning ? ` (photo rejected: ${result.photoWarning})` : ''}`);
     res.json(result);
   } catch (err) {
@@ -525,6 +538,34 @@ app.delete('/api/pending-cards/:id', (req, res) => {
 // --- worker management (list / rename / wage / remove) ------------------------
 app.get('/api/employees', (req, res) => {
   res.json(db.listEmployees());
+});
+
+// One-time backfill for employees enrolled before employees.picture_path
+// existed (see db.js's migration comment and deviceClient.js's
+// fetchEnrolledFacePhoto for why a dedicated profile photo matters) --
+// pulls each one's already-stored face record back from the device's own
+// face picture library instead of leaving them with whatever their latest
+// check-in's best-effort live snapshot happened to look like. Sequential,
+// not parallel -- these are real requests against the same device the
+// live poller is also hitting, and this is an occasional one-off action,
+// not something that needs to be fast.
+app.post('/api/employees/backfill-photos', async (req, res) => {
+  if (rejectIfAuthBackedOff(res)) return;
+  const candidates = db.listEmployeesMissingPicture();
+  const updated = [];
+  const failed = [];
+  for (const emp of candidates) {
+    try {
+      const jpeg = await deviceClient.fetchEnrolledFacePhoto(emp.employee_no);
+      const picturePath = saveSnapshot(jpeg, { employeeNo: emp.employee_no, serialNo: 'backfill' });
+      db.setEmployeePicture(emp.employee_no, picturePath);
+      updated.push({ employeeNo: emp.employee_no, name: emp.name });
+    } catch (err) {
+      failed.push({ employeeNo: emp.employee_no, name: emp.name, error: err.message });
+    }
+  }
+  logger.log(`[enroll] photo backfill: ${updated.length} updated, ${failed.length} failed (of ${candidates.length} candidates)`);
+  res.json({ updated, failed });
 });
 
 app.put('/api/employees/:employeeNo', async (req, res) => {
@@ -670,17 +711,22 @@ app.get('/api/payroll', (req, res) => {
 const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 app.get('/api/checkins/export', async (req, res) => {
-  const { date, employeeNo } = req.query;
-  const rows = db.listCheckins({ date, employeeNo, limit: 1_000_000 });
+  const { date, start, end, employeeNo } = req.query;
+  if (start && end && start > end) {
+    return res.status(400).json({ error: 'start date must be before end date' });
+  }
+  const rows = db.listCheckins({ date, start, end, employeeNo, limit: 1_000_000 });
   const siteName = db.getSetting('site_name', 'დასწრების ჟურნალი');
   const filterParts = [];
-  filterParts.push(date ? `თარიღი: ${date}` : 'ყველა თარიღი');
+  if (start && end) filterParts.push(`თარიღი: ${start} — ${end}`);
+  else if (date) filterParts.push(`თარიღი: ${date}`);
+  else filterParts.push('ყველა თარიღი');
   if (employeeNo) {
     const empName = db.employeeName(employeeNo);
     filterParts.push(`თანამშრომელი: ${empName || `#${employeeNo}`}`);
   }
   const wb = await buildCheckinsReport(rows, { siteName, filterLabel: filterParts.join(' · ') });
-  const filename = `attendance-report${date ? `-${date}` : ''}.xlsx`;
+  const filename = `attendance-report${start && end ? `-${start}_to_${end}` : date ? `-${date}` : ''}.xlsx`;
   res.type(XLSX_CONTENT_TYPE).attachment(filename);
   await wb.xlsx.write(res);
   res.end();
